@@ -65,15 +65,9 @@ public class LMListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
-        long timeStart = System.nanoTime();
-
         if (isLog(event.getBlock())) {
             ItemStack item = event.getPlayer().getItemInHand();
-            if (isAxe(item) && treeTest(event.getBlock())) {
-                long timeEnd = System.nanoTime();
-
-                //debug
-                event.getPlayer().sendMessage("is a true Tree | (" + treeCache.size() + ") time:" + ((timeEnd - timeStart) / 1000000.0) + " ms");
+            if (isAxe(item) && treeTest(event.getBlock())) {            
 
                 treeCache.remove(event.getBlock());
 
