@@ -26,9 +26,7 @@ package me.kime.lumberman;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.Random;
-import java.util.function.Consumer;
 import java.util.function.Function;
-import me.kime.lumberman.util.KLogger;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -45,30 +43,30 @@ import org.bukkit.inventory.ItemStack;
  * @author Kime
  */
 public class LMListener implements Listener {
-    
+
     private final LumberMan plugin;
     private final Random random;
     private final LinkedHashMap<Block, Block> treeCache;
     private final LinkedList<Block> branchsCache;
     private final LinkedHashMap<Block, Block> leavesCache;
-    
+
     private final int BRANCH_DEEP = 5;
     private final int LEAVES_DEEP = 1;
-    
+
     public LMListener(LumberMan plugin) {
         this.plugin = plugin;
-        
+
         random = new Random();
-        
+
         treeCache = new LinkedHashMap<>(512);
         branchsCache = new LinkedList<>();
         leavesCache = new LinkedHashMap<>(512);
     }
-    
+
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         long timeStart = System.nanoTime();
-        
+
         if (isLog(event.getBlock())) {
             ItemStack item = event.getPlayer().getItemInHand();
             if (isAxe(item) && treeTest(event.getBlock())) {
@@ -76,32 +74,41 @@ public class LMListener implements Listener {
 
                 //debug
                 event.getPlayer().sendMessage("is a true Tree | (" + treeCache.size() + ") time:" + ((timeEnd - timeStart) / 1000000.0) + " ms");
-                
+
                 treeCache.remove(event.getBlock());
-                
+
                 popTree(event.getPlayer());
-                
+
             }
         }
         treeCache.clear();
         branchsCache.clear();
         leavesCache.clear();
     }
-    
+
     private void popTree(Player player) {
-        treeCache.values().forEach((Block b) -> {
-            b.breakNaturally();
-            if (breaksTool(player.getItemInHand())) {
-                player.setHealth(player.getHealth() - 1);
-                player.getInventory().clear(player.getInventory().getHeldItemSlot());
-            }
-        });
+        boolean isBreak = false;
+        double healthDamage = 0;
         
+        for (Block b : treeCache.values()) {
+            b.breakNaturally();
+            if (isBreak) {
+                healthDamage++;
+            } else if (breaksTool(player.getItemInHand())) {
+                player.getInventory().clear(player.getInventory().getHeldItemSlot());
+                isBreak = true;
+            }
+        }
+
+        if (healthDamage > 0) {
+            player.damage(healthDamage);
+        }
+
         leavesCache.values().forEach((Block b) -> {
             b.breakNaturally();
         });
     }
-    
+
     private boolean treeTest(Block base) {
         treeCache.clear();
         branchsCache.clear();
@@ -109,7 +116,7 @@ public class LMListener implements Listener {
         Block block = base;
         while (isLog(block)) {
             treeCache.put(block, block);
-            
+
             lookAroundInRange((Block b) -> {
                 if (isNatureLeaf(b) && !leavesCache.containsKey(b)) {
                     leavesCache.put(b, b);
@@ -124,26 +131,26 @@ public class LMListener implements Listener {
                 }
                 return false;
             }, block);
-            
+
             block = block.getRelative(BlockFace.UP);
         }
-        
+
         lookAround((Block t) -> {
             if (isLog(t)) {
                 branchsCache.addFirst(t);
             }
             return false;
         }, block);
-        
+
         if ((isNatureLeaf(block)) || (!branchsCache.isEmpty() && branchTest(branchsCache.removeFirst(), 1))) {
             branchsCache.forEach(b -> branchTest(b, 1));
             return true;
         } else {
             return false;
         }
-        
+
     }
-    
+
     private boolean branchTest(Block block, final int count) {
         if (!isLog(block)) {
             return false;
@@ -154,27 +161,46 @@ public class LMListener implements Listener {
         if (treeCache.containsKey(block)) {
             return false;
         }
-        
+
         treeCache.put(block, block);
-        
+
         lookAroundInRange((Block b) -> {
             if (isNatureLeaf(b) && !leavesCache.containsKey(b)) {
                 leavesCache.put(b, b);
             }
             return false;
         }, block, LEAVES_DEEP);
-        
+
         boolean isTree = false;
-        
+
         Block up = block.getRelative(BlockFace.UP);
-        
+
         isTree = branchTest(up, count + 1) ? true : isTree;
         isTree = lookAround((Block t) -> branchTest(t, count + 1), up) ? true : isTree;
         isTree = lookAround((Block t) -> branchTest(t, count + 1), block) ? true : isTree;
-        
+
         return isTree || isNatureLeaf(up);
     }
-    
+
+    private boolean breaksTool(ItemStack item) {
+        if ((item != null)) {
+            short durability = item.getDurability();
+            short maxDurability = item.getType().getMaxDurability();
+            if (durability < maxDurability) {
+                int level = item.getEnchantmentLevel(Enchantment.DURABILITY);
+
+                durability += (random.nextInt(100) <= (100.0 / (level + 1))) ? 1 : 0;
+
+                item.setDurability(durability);
+
+                if (durability >= maxDurability) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private boolean lookAround(Function<Block, Boolean> func, Block block) {
         boolean isTrue = false;
         isTrue = func.apply(block.getRelative(BlockFace.EAST)) ? true : isTrue;
@@ -187,7 +213,7 @@ public class LMListener implements Listener {
         isTrue = func.apply(block.getRelative(BlockFace.NORTH_EAST)) ? true : isTrue;
         return isTrue;
     }
-    
+
     private boolean lookAroundInRange(Function<Block, Boolean> func, Block block, int range) {
         boolean isTrue = false;
         for (int x = -range; x <= range; x++) {
@@ -199,12 +225,12 @@ public class LMListener implements Listener {
         }
         return isTrue;
     }
-    
+
     private boolean isLog(Block block) {
         Material type = block.getType();
         return (Material.LOG.equals(type) || Material.LOG_2.equals(type));
     }
-    
+
     public boolean isNatureLeaf(Block block) {
         Material type = block.getType();
         if (Material.LEAVES.equals(type) || Material.LEAVES_2.equals(type)) {
@@ -213,7 +239,7 @@ public class LMListener implements Listener {
         }
         return false;
     }
-    
+
     private boolean isAxe(ItemStack item) {
         switch (item.getType()) {
             case WOOD_AXE:
@@ -224,23 +250,8 @@ public class LMListener implements Listener {
                 return true;
             default:
                 return false;
-            
+
         }
     }
-    
-    private boolean breaksTool(ItemStack item) {
-        if ((item != null)) {
-            short durability = item.getDurability();
-            
-            int level = item.getEnchantmentLevel(Enchantment.DURABILITY);
-            
-            durability += (random.nextInt(100) <= (100.0 / (level + 1))) ? 1 : 0;
-            
-            if (durability >= item.getType().getMaxDurability()) {
-                return true;
-            }
-            item.setDurability(durability);
-        }
-        return false;
-    }
+
 }
