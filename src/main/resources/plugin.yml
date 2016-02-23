@@ -1,0 +1,5 @@
+name: LumberMan
+main: me.kime.lumberman.LumberMan
+version: ${project.version}
+author: Kime
+load: POSTWORLD
