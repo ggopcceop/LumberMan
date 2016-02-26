@@ -23,39 +23,43 @@
  */
 package me.kime.lumberman;
 
-import me.kime.lumberman.util.KLogger;
-import org.bukkit.Bukkit;
-import org.bukkit.event.HandlerList;
-import org.bukkit.plugin.java.JavaPlugin;
+import com.google.inject.Inject;
+import java.util.logging.Logger;
+import org.spongepowered.api.Sponge;
+import org.spongepowered.api.event.Listener;
+import org.spongepowered.api.event.game.state.GameStartedServerEvent;
+import org.spongepowered.api.event.game.state.GameStoppingEvent;
+import org.spongepowered.api.plugin.Plugin;
 
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 /**
  *
  * @author Kime
  */
-public class LumberMan extends JavaPlugin {
+@Plugin(id = "LimberMan", name = "LimberMan", version = "${project.version}")
+public class LumberMan {
 
     private LMListener eventListener;
 
-    @Override
-    public void onDisable() {
-        HandlerList.unregisterAll(eventListener);
-        
-        KLogger.info("LumberMan Disabled!");
+    @Inject
+    private Logger logger;
+
+    @Listener
+    public void onDisable(GameStoppingEvent event) {
+        Sponge.getEventManager().unregisterListeners(eventListener);
+
+        logger.info("LumberMan Disabled!");
     }
 
-    @Override
-    public void onEnable() {
-        
-        saveDefaultConfig();
-        
+    @Listener
+    public void onServerStart(GameStartedServerEvent event) {
         eventListener = new LMListener(this);
-        Bukkit.getPluginManager().registerEvents(eventListener, this);
-        
-        KLogger.info("LumberMan Enabled!");
+
+        Sponge.getEventManager().registerListeners(this, eventListener);
+
+        logger.info("LumberMan Enabled!");
+    }
+
+    public Logger getLogger() {
+        return logger;
     }
 }

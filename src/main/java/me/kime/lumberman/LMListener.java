@@ -25,30 +25,46 @@ package me.kime.lumberman;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
+import java.util.Optional;
 import java.util.Random;
 import java.util.function.Function;
-import org.bukkit.Material;
-import org.bukkit.block.Block;
-import org.bukkit.block.BlockFace;
-import org.bukkit.enchantments.Enchantment;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.inventory.ItemStack;
+import org.spongepowered.api.block.BlockSnapshot;
+import org.spongepowered.api.block.BlockState;
+import org.spongepowered.api.block.BlockType;
+import org.spongepowered.api.block.BlockTypes;
+import org.spongepowered.api.data.Transaction;
+import org.spongepowered.api.data.key.Keys;
+import org.spongepowered.api.data.manipulator.immutable.block.ImmutableDecayableData;
+import org.spongepowered.api.data.meta.ItemEnchantment;
+import org.spongepowered.api.effect.sound.SoundTypes;
+import org.spongepowered.api.entity.Entity;
+import org.spongepowered.api.entity.EntityTypes;
+import org.spongepowered.api.entity.living.player.Player;
+import org.spongepowered.api.event.Listener;
+import org.spongepowered.api.event.block.ChangeBlockEvent;
+import org.spongepowered.api.event.cause.Cause;
+import org.spongepowered.api.event.filter.IsCancelled;
+import org.spongepowered.api.event.filter.cause.Root;
+import org.spongepowered.api.item.Enchantments;
+import org.spongepowered.api.item.ItemType;
+import org.spongepowered.api.item.ItemTypes;
+import org.spongepowered.api.item.inventory.ItemStack;
+import org.spongepowered.api.util.Direction;
+import org.spongepowered.api.util.Tristate;
+import org.spongepowered.api.world.Location;
+import org.spongepowered.api.world.World;
 
 /**
  *
  * @author Kime
  */
-public class LMListener implements Listener {
+public class LMListener {
 
     private final LumberMan plugin;
     private final Random random;
-    private final LinkedHashMap<Block, Block> treeCache;
-    private final LinkedList<Block> branchsCache;
-    private final LinkedHashMap<Block, Block> leavesCache;
+    private final LinkedHashMap<BlockSnapshot, BlockSnapshot> treeCache;
+    private final LinkedList<BlockSnapshot> branchsCache;
+    private final LinkedHashMap<BlockSnapshot, BlockSnapshot> leavesCache;
 
     private final int BRANCH_DEEP = 5;
     private final int LEAVES_DEEP = 1;
@@ -63,80 +79,103 @@ public class LMListener implements Listener {
         leavesCache = new LinkedHashMap<>(512);
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onBlockBreak(BlockBreakEvent event) {
-        if (isLog(event.getBlock())) {
-            ItemStack item = event.getPlayer().getItemInHand();
-            if (isAxe(item) && treeTest(event.getBlock())) {            
-
-                treeCache.remove(event.getBlock());
-
-                popTree(event.getPlayer());
-
+    @Listener
+    @IsCancelled(Tristate.FALSE)
+    public void onBlockBreak(ChangeBlockEvent.Break event, @Root Player player) {
+        for (Transaction<BlockSnapshot> transaction : event.getTransactions()) {
+            BlockSnapshot block = transaction.getOriginal();
+            if (isLog(block.getState())) {
+                Optional<ItemStack> item = player.getItemInHand();
+                if (item.filter(this::isAxe).isPresent() && treeTest(block)) {
+                    treeCache.remove(block);
+                    popTree(player);
+                }
             }
+            treeCache.clear();
+            branchsCache.clear();
+            leavesCache.clear();
         }
-        treeCache.clear();
-        branchsCache.clear();
-        leavesCache.clear();
     }
 
     private void popTree(Player player) {
         boolean isBreak = false;
         double healthDamage = 0;
-        
-        for (Block b : treeCache.values()) {
-            b.breakNaturally();
+
+        for (BlockSnapshot b : treeCache.values()) {
+            Location<World> location = b.getLocation().get();
+            ItemStack drop = ItemStack.builder().fromBlockSnapshot(b).build();
+            Optional<Entity> optional = location.getExtent().createEntity(EntityTypes.ITEM, location.getPosition());
+            if (optional.isPresent()) {
+                Entity item = optional.get();
+                item.offer(Keys.REPRESENTED_ITEM, drop.createSnapshot());
+                location.getExtent().spawnEntity(item, Cause.of(player));
+            }
+            b.getLocation().get().removeBlock();
             if (isBreak) {
                 healthDamage++;
-            } else if (breaksTool(player.getItemInHand())) {
-                player.getInventory().clear(player.getInventory().getHeldItemSlot());
+            } else if (breaksTool(player)) {
                 isBreak = true;
             }
         }
 
         if (healthDamage > 0) {
-            player.damage(healthDamage);
+            Double health = player.get(Keys.HEALTH).get();
+            if (health <= healthDamage) {
+                health = 0d;
+            } else {
+                health -= healthDamage;
+            }
+            player.offer(Keys.HEALTH, health);
         }
 
-        leavesCache.values().forEach((Block b) -> {
-            b.breakNaturally();
+        leavesCache.values().forEach(b -> {
+            Location<World> location = b.getLocation().get();
+            ItemStack drop = ItemStack.builder().fromBlockSnapshot(b).build();
+            Optional<Entity> optional = location.getExtent().createEntity(EntityTypes.ITEM, location.getPosition());
+            if (optional.isPresent()) {
+                Entity item = optional.get();
+                item.offer(Keys.REPRESENTED_ITEM, drop.createSnapshot());
+                location.getExtent().spawnEntity(item, Cause.of(player));
+            }
+            b.getLocation().get().removeBlock();
         });
+
     }
 
-    private boolean treeTest(Block base) {
+    private boolean treeTest(BlockSnapshot base) {
         treeCache.clear();
         branchsCache.clear();
         leavesCache.clear();
-        Block block = base;
-        while (isLog(block)) {
+        BlockSnapshot block = base;
+        while (isLog(block.getState())) {
             treeCache.put(block, block);
 
-            lookAroundInRange((Block b) -> {
-                if (isNatureLeaf(b) && !leavesCache.containsKey(b)) {
+            lookAroundInRange(b -> {
+                if (isNatureLeaf(b.getState()) && !leavesCache.containsKey(b)) {
                     leavesCache.put(b, b);
                 }
                 return false;
             }, block, LEAVES_DEEP);
 
             //find branch
-            lookAround((Block t) -> {
-                if (isLog(t)) {
+            lookAround(t -> {
+                if (isLog(t.getState())) {
                     branchsCache.addFirst(t);
                 }
                 return false;
             }, block);
 
-            block = block.getRelative(BlockFace.UP);
+            block = block.getLocation().get().getRelative(Direction.UP).createSnapshot();
         }
 
-        lookAround((Block t) -> {
-            if (isLog(t)) {
+        lookAround(t -> {
+            if (isLog(t.getState())) {
                 branchsCache.addFirst(t);
             }
             return false;
         }, block);
 
-        if ((isNatureLeaf(block)) || (!branchsCache.isEmpty() && branchTest(branchsCache.removeFirst(), 1))) {
+        if ((isNatureLeaf(block.getState())) || (!branchsCache.isEmpty() && branchTest(branchsCache.removeFirst(), 1))) {
             branchsCache.forEach(b -> branchTest(b, 1));
             return true;
         } else {
@@ -145,8 +184,8 @@ public class LMListener implements Listener {
 
     }
 
-    private boolean branchTest(Block block, final int count) {
-        if (!isLog(block)) {
+    private boolean branchTest(BlockSnapshot block, final int count) {
+        if (!isLog(block.getState())) {
             return false;
         }
         if (count > BRANCH_DEEP) {
@@ -158,8 +197,8 @@ public class LMListener implements Listener {
 
         treeCache.put(block, block);
 
-        lookAroundInRange((Block b) -> {
-            if (isNatureLeaf(b) && !leavesCache.containsKey(b)) {
+        lookAroundInRange((BlockSnapshot b) -> {
+            if (isNatureLeaf(b.getState()) && !leavesCache.containsKey(b)) {
                 leavesCache.put(b, b);
             }
             return false;
@@ -167,27 +206,41 @@ public class LMListener implements Listener {
 
         boolean isTree = false;
 
-        Block up = block.getRelative(BlockFace.UP);
+        BlockSnapshot up = block.getLocation().get().getRelative(Direction.UP).createSnapshot();
 
         isTree = branchTest(up, count + 1) ? true : isTree;
-        isTree = lookAround((Block t) -> branchTest(t, count + 1), up) ? true : isTree;
-        isTree = lookAround((Block t) -> branchTest(t, count + 1), block) ? true : isTree;
+        isTree = lookAround(t -> branchTest(t, count + 1), up) ? true : isTree;
+        isTree = lookAround(t -> branchTest(t, count + 1), block) ? true : isTree;
 
-        return isTree || isNatureLeaf(up);
+        return isTree || isNatureLeaf(up.getState());
     }
 
-    private boolean breaksTool(ItemStack item) {
-        if ((item != null)) {
-            short durability = item.getDurability();
-            short maxDurability = item.getType().getMaxDurability();
-            if (durability < maxDurability) {
-                int level = item.getEnchantmentLevel(Enchantment.DURABILITY);
+    private boolean breaksTool(Player player) {
+        Optional<ItemStack> optional = player.getItemInHand();
+        if (optional.isPresent()) {
+            ItemStack item = optional.get();
+            Optional<Integer> durability = item.get(Keys.ITEM_DURABILITY);
+            if (durability.filter(d -> d > 0).isPresent()) {
+                Integer durabilityValue = durability.get();
+                int unbeakingLevel = 0;
+                if (item.get(Keys.ITEM_ENCHANTMENTS).isPresent()) {
+                    for (ItemEnchantment e : item.get(Keys.ITEM_ENCHANTMENTS).get()) {
+                        if (Enchantments.UNBREAKING.equals(e.getEnchantment())) {
+                            unbeakingLevel = e.getLevel();
+                            break;
+                        }
+                    }
+                }
 
-                durability += (random.nextInt(100) <= (100.0 / (level + 1))) ? 1 : 0;
+                durabilityValue -= (random.nextInt(100) <= (100.0 / (unbeakingLevel + 1))) ? 1 : 0;
 
-                item.setDurability(durability);
+                item.offer(Keys.ITEM_DURABILITY, durabilityValue);
 
-                if (durability >= maxDurability) {
+                player.setItemInHand(item);
+
+                if (durabilityValue <= 0) {
+                    player.setItemInHand(null);
+                    player.getWorld().playSound(SoundTypes.ITEM_BREAK, player.getLocation().getPosition(), 1);
                     return true;
                 }
             }
@@ -195,57 +248,58 @@ public class LMListener implements Listener {
         return false;
     }
 
-    private boolean lookAround(Function<Block, Boolean> func, Block block) {
+    private boolean lookAround(Function<BlockSnapshot, Boolean> func, BlockSnapshot block) {
         boolean isTrue = false;
-        isTrue = func.apply(block.getRelative(BlockFace.EAST)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.SOUTH_EAST)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.SOUTH)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.SOUTH_WEST)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.WEST)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.NORTH_WEST)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.NORTH)) ? true : isTrue;
-        isTrue = func.apply(block.getRelative(BlockFace.NORTH_EAST)) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.EAST).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.SOUTHEAST).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.SOUTH).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.SOUTHWEST).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.WEST).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.NORTHWEST).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.NORTH).createSnapshot()) ? true : isTrue;
+        isTrue = func.apply(block.getLocation().get().getRelative(Direction.NORTHEAST).createSnapshot()) ? true : isTrue;
         return isTrue;
     }
 
-    private boolean lookAroundInRange(Function<Block, Boolean> func, Block block, int range) {
+    private boolean lookAroundInRange(Function<BlockSnapshot, Boolean> func, BlockSnapshot block, int range) {
         boolean isTrue = false;
         for (int x = -range; x <= range; x++) {
             for (int y = 0; y <= range; y++) {
                 for (int z = -range; z <= range; z++) {
-                    isTrue = func.apply(block.getRelative(x, y, z)) ? true : isTrue;
+                    isTrue = func.apply(block.getLocation().get().add(x, y, z).createSnapshot()) ? true : isTrue;
                 }
             }
         }
         return isTrue;
     }
 
-    private boolean isLog(Block block) {
-        Material type = block.getType();
-        return (Material.LOG.equals(type) || Material.LOG_2.equals(type));
+    private boolean isLog(BlockState block) {
+        BlockType type = block.getType();
+        return (BlockTypes.LOG.equals(type) || BlockTypes.LOG2.equals(type));
     }
 
-    public boolean isNatureLeaf(Block block) {
-        Material type = block.getType();
-        if (Material.LEAVES.equals(type) || Material.LEAVES_2.equals(type)) {
-            byte data = block.getData();
-            return ((data & 4) != 4);
+    public boolean isNatureLeaf(BlockState block) {
+        BlockType type = block.getType();
+
+        if (BlockTypes.LEAVES.equals(type) || BlockTypes.LEAVES2.equals(type)) {
+            Optional<ImmutableDecayableData> decayable = block.get(ImmutableDecayableData.class
+            );
+            if (decayable.isPresent()) {
+                return decayable.get().decayable().get();
+            }
         }
         return false;
     }
 
     private boolean isAxe(ItemStack item) {
-        switch (item.getType()) {
-            case WOOD_AXE:
-            case STONE_AXE:
-            case IRON_AXE:
-            case GOLD_AXE:
-            case DIAMOND_AXE:
-                return true;
-            default:
-                return false;
+        ItemType type = item.getItem();
+        if (type.equals(ItemTypes.WOODEN_AXE) || type.equals(ItemTypes.STONE_AXE)
+                || type.equals(ItemTypes.IRON_AXE) || type.equals(ItemTypes.GOLDEN_AXE)
+                || type.equals(ItemTypes.DIAMOND_AXE)) {
 
+            return true;
         }
+        return false;
     }
 
 }
